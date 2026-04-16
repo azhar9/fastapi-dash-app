@@ -10,11 +10,20 @@ import asyncpg
 from fastapi import Request
 
 from .cache import Cache
+from .llm import LlmClient
 
 
 def get_pool(request: Request) -> asyncpg.Pool:
     return request.app.state.pool
 
 
+def get_ro_pool(request: Request) -> asyncpg.Pool:
+    return request.app.state.ro_pool
+
+
 def get_cache(request: Request) -> Cache:
     return request.app.state.cache
+
+
+def get_llm(request: Request) -> LlmClient | None:
+    return getattr(request.app.state, "llm", None)

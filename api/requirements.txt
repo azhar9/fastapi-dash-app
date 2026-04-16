@@ -5,3 +5,6 @@ redis[hiredis]==5.2.0
 pydantic==2.10.2
 pydantic-settings==2.6.1
 orjson==3.10.12
+# Groq is OpenAI-API-compatible, so we use the official OpenAI SDK with a
+# custom base_url. No extra Groq-specific SDK required.
+openai==1.57.4

@@ -71,3 +71,19 @@ def get_rolling(portfolio_id: int, window_days: int = 60) -> list[dict]:
 
 def get_risk(portfolio_id: int, window_days: int = 365) -> dict:
     return _get(f"/portfolios/{portfolio_id}/risk", window_days=window_days)
+
+
+def ask(question: str) -> dict:
+    try:
+        r = _client.post("/ask", json={"question": question}, timeout=30.0)
+    except httpx.HTTPError as e:
+        log.warning("ask call failed: %s", e)
+        raise ApiError(0, f"Could not reach API ({e.__class__.__name__})") from e
+    if r.status_code >= 400:
+        try:
+            body = r.json()
+            detail = body.get("detail") or body.get("title") or r.text
+        except ValueError:
+            detail = r.text
+        raise ApiError(r.status_code, detail)
+    return r.json()

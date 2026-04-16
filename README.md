@@ -65,9 +65,11 @@ back to deterministic synthetic prices so the stack always boots.
 │   │   ├── errors.py     global exception handlers → problem+json
 │   │   ├── db.py         asyncpg pool + SQL file loader
 │   │   ├── cache.py      async Redis wrapper + @cached decorator
-│   │   ├── deps.py       FastAPI DI providers
+│   │   ├── deps.py       FastAPI DI providers (pool, ro_pool, cache, llm)
+│   │   ├── llm.py        Groq client + prompt + response schema
+│   │   ├── sqlguard.py   structural validator for LLM-emitted SQL
 │   │   ├── schemas.py    Pydantic response models
-│   │   ├── routers/      portfolios, holdings, performance, risk, health
+│   │   ├── routers/      portfolios, holdings, performance, risk, ask, health
 │   │   └── sql/          *.sql files, grouped by domain
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -75,7 +77,7 @@ back to deterministic synthetic prices so the stack always boots.
 │   ├── app.py            sidebar + page router
 │   ├── api_client.py     httpx client to FastAPI
 │   ├── components.py     KPI card, formatters, selectors
-│   ├── pages/            overview, holdings, performance, risk
+│   ├── pages/            overview, holdings, performance, risk, ask
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── seed/                 one-shot Yahoo → PG loader (curl_cffi-impersonated)
@@ -221,6 +223,51 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Same pattern for the dashboard (`python -m dashboard.app`).
+
+## Natural-language query ("Ask" page)
+
+The dashboard has a fifth page that accepts plain-English questions,
+turns them into SQL via an LLM, runs the SQL, and renders the result
+with an auto-picked chart type. The feature is defensive by default:
+three independent layers sit between the user's text and the database.
+
+**Pipeline**
+
+```
+ question  →  Groq (Llama 3.3 70B, OpenAI-compatible API)
+           →  JSON { sql, chart_type, x_col, y_col, title, explanation }
+           →  sqlguard.sanitise()   # keyword / single-stmt / LIMIT check
+           →  asyncpg ro_pool       # dedicated SELECT-only role
+              + SET LOCAL statement_timeout = '5s'
+           →  rows + chart hints back to Dash
+```
+
+**Safety layers (defence in depth)**
+
+1. **Prompt-level** — the system prompt gives the LLM a curated schema and
+   hard-coded rules ("single SELECT, always LIMIT, never DROP"). Works
+   most of the time, but an LLM is never a security boundary.
+2. **Structural validation** (`api/app/sqlguard.py`) — rejects empty
+   strings, multi-statement text (anything with a `;` mid-query), and
+   any of `INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/GRANT/CREATE/...`.
+   Appends `LIMIT 1000` if the LLM forgot one.
+3. **Postgres RO role** (`db/init/002_ro_role.sql`) — the `/ask`
+   endpoint uses a separate asyncpg pool that connects as `gam_ro`,
+   which has `SELECT`-only grants. If both the prompt rules and the
+   sanitiser were to fail, Postgres would still refuse. Per-request
+   `statement_timeout = 5s` caps runaway queries.
+
+**Configuration**
+
+- `GROQ_API_KEY` (env only — never in source). The `/ask` endpoint
+  returns 503 if unset, so the rest of the app runs fine without it.
+- `GROQ_MODEL` — defaults to `llama-3.3-70b-versatile`.
+- Open http://localhost:8050/ask and try: *"Top 5 holdings in the Tech
+  portfolio by weight"*, or *"NAV of GAM_CORE over time"*.
+
+**Why Groq and not Claude/OpenAI?** Groq exposes an OpenAI-compatible
+endpoint and runs Llama on their LPU hardware, so responses come back
+in ~1s — latency that's fine for an interactive dashboard.
 
 ## Tradeoffs and what I'd add next
 

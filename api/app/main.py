@@ -16,9 +16,10 @@ from .cache import Cache, create_client
 from .config import get_settings
 from .db import create_pool
 from .errors import register_exception_handlers
+from .llm import maybe_build_client
 from .logging_config import configure_logging
 from .middleware import RequestContextMiddleware
-from .routers import health, holdings, performance, portfolios, risk
+from .routers import ask, health, holdings, performance, portfolios, risk
 
 log = logging.getLogger(__name__)
 
@@ -29,18 +30,26 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.api_log_level)
     log.info("api starting", extra={"version": "0.1.0"})
 
-    pool = await create_pool(settings.pg_dsn)
+    pool    = await create_pool(settings.pg_dsn)
+    ro_pool = await create_pool(settings.pg_ro_dsn)
     redis_client = await create_client(settings.redis_url)
     cache = Cache(redis_client, default_ttl=settings.api_cache_ttl_seconds)
 
-    app.state.pool = pool
-    app.state.cache = cache
-    app.state.redis = redis_client
+    app.state.pool    = pool
+    app.state.ro_pool = ro_pool
+    app.state.cache   = cache
+    app.state.redis   = redis_client
+    app.state.llm     = maybe_build_client()
+    if app.state.llm is None:
+        log.info("GROQ_API_KEY not set — /ask endpoint will return 503")
+    else:
+        log.info("llm client ready")
     try:
         yield
     finally:
         log.info("api shutting down")
         await pool.close()
+        await ro_pool.close()
         await redis_client.aclose()
 
 
@@ -74,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(holdings.router)
     app.include_router(performance.router)
     app.include_router(risk.router)
+    app.include_router(ask.router)
     return app
 
 
