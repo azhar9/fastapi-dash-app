@@ -35,8 +35,8 @@ class AskResponse(BaseModel):
 
 
 SCHEMA_BLOCK = """\
-You write SQL for a PostgreSQL 16 database supporting a portfolio-performance
-reporting dashboard for an asset management firm. The schema is:
+You write SQL for a PostgreSQL 16 database backing a demo portfolio
+analytics dashboard. The schema is:
 
   securities (ticker PK, name, sector, asset_class, currency)
   prices (ticker FK, as_of_date, open, high, low, close, adj_close, volume)
@@ -46,7 +46,7 @@ reporting dashboard for an asset management firm. The schema is:
     -- PK (benchmark, as_of_date). Currently only 'SPY' is loaded.
 
   portfolios (portfolio_id PK, code, name, strategy, benchmark, inception, base_ccy)
-    -- Three rows: GAM_CORE, GAM_TECH, GAM_DIVIDEND. All benchmark = 'SPY'.
+    -- Three rows with codes CORE, TECH, DIVIDEND. All benchmark = 'SPY'.
 
   holdings (portfolio_id FK, ticker FK, weight, valid_from, valid_to)
     -- weight is a fraction in [0, 1]. valid_to NULL means 'still held'.
@@ -68,27 +68,27 @@ FEW_SHOTS = [
                 "FROM holdings h "
                 "JOIN portfolios p ON p.portfolio_id = h.portfolio_id "
                 "JOIN securities s ON s.ticker = h.ticker "
-                "WHERE p.code = 'GAM_TECH' AND h.valid_to IS NULL "
+                "WHERE p.code = 'TECH' AND h.valid_to IS NULL "
                 "ORDER BY h.weight DESC LIMIT 5"
             ),
-            "explanation": "Current holdings in GAM_TECH, ordered by weight.",
+            "explanation": "Current holdings in the TECH portfolio, ordered by weight.",
             "chart_type": "bar", "x_col": "ticker", "y_col": "weight_pct",
-            "title": "Top 5 holdings by weight — GAM Tech",
+            "title": "Top 5 holdings by weight — Tech",
         },
     },
     {
-        "user": "Show me the NAV of GAM_CORE over time.",
+        "user": "Show me the NAV of the Core portfolio over time.",
         "out": {
             "sql": (
                 "SELECT pn.as_of_date, pn.nav "
                 "FROM portfolio_nav pn "
                 "JOIN portfolios p USING (portfolio_id) "
-                "WHERE p.code = 'GAM_CORE' "
+                "WHERE p.code = 'CORE' "
                 "ORDER BY pn.as_of_date"
             ),
             "explanation": "Daily NAV series for the Core portfolio.",
             "chart_type": "line", "x_col": "as_of_date", "y_col": "nav",
-            "title": "NAV — GAM Core",
+            "title": "NAV — Core",
         },
     },
     {
@@ -99,12 +99,12 @@ FEW_SHOTS = [
                 "FROM holdings h "
                 "JOIN portfolios p  ON p.portfolio_id = h.portfolio_id "
                 "JOIN securities s  ON s.ticker      = h.ticker "
-                "WHERE p.code = 'GAM_DIVIDEND' AND h.valid_to IS NULL "
+                "WHERE p.code = 'DIVIDEND' AND h.valid_to IS NULL "
                 "GROUP BY s.sector ORDER BY weight_pct DESC"
             ),
-            "explanation": "Current sector weights of GAM_DIVIDEND.",
+            "explanation": "Current sector weights of the DIVIDEND portfolio.",
             "chart_type": "pie", "x_col": "sector", "y_col": "weight_pct",
-            "title": "Sector breakdown — GAM Dividend",
+            "title": "Sector breakdown — Dividend",
         },
     },
 ]

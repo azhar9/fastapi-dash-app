@@ -73,10 +73,10 @@ jobs:
           TMP=$(mktemp)
           cat > "$TMP" <<EOF
           # Written by .github/workflows/cd.yml. Do not edit by hand.
-          POSTGRES_USER=gam
+          POSTGRES_USER=app
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-          POSTGRES_DB=gam
-          POSTGRES_RO_USER=gam_ro
+          POSTGRES_DB=portfolio
+          POSTGRES_RO_USER=app_ro
           POSTGRES_RO_PASSWORD=$POSTGRES_RO_PASSWORD
 
           API_LOG_LEVEL=INFO

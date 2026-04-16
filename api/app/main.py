@@ -59,8 +59,8 @@ def create_app() -> FastAPI:
     configure_logging(get_settings().api_log_level)
 
     app = FastAPI(
-        title="GAM Performance API",
-        description="Read-only API over the portfolio performance store.",
+        title="Portfolio Analytics API",
+        description="Read-only API over a demo portfolio-analytics store.",
         version="0.1.0",
         lifespan=lifespan,
     )

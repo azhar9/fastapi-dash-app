@@ -10,7 +10,7 @@ Pipeline:
 Three independent safety layers:
   1. Banned-keyword / single-statement check (fast fail, no DB round-trip).
   2. statement_timeout set via `SET LOCAL` on the transaction.
-  3. Dedicated gam_ro PG role — SELECT grants only. Even a slip in the
+  3. Dedicated app_ro PG role — SELECT grants only. Even a slip in the
      upper layers hits a permission denial.
 """
 from __future__ import annotations

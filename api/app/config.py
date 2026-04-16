@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     # Read-only role used only by the /ask endpoint. Credentials are fixed
     # by the 002_ro_role.sql init script; exposed via env so the compose
     # stack can override if you want a different password locally.
-    postgres_ro_user: str = Field("gam_ro", alias="POSTGRES_RO_USER")
-    postgres_ro_password: str = Field("gam_ro", alias="POSTGRES_RO_PASSWORD")
+    postgres_ro_user: str = Field("app_ro", alias="POSTGRES_RO_USER")
+    postgres_ro_password: str = Field("app_ro", alias="POSTGRES_RO_PASSWORD")
 
     redis_host: str = Field(alias="REDIS_HOST")
     redis_port: int = Field(6379, alias="REDIS_PORT")

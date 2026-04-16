@@ -54,7 +54,7 @@ def cache_key(namespace: str, *parts: Any) -> str:
     joined = ":".join(str(p) for p in parts)
     if len(joined) > 80:
         joined = hashlib.sha1(joined.encode()).hexdigest()
-    return f"gam:{namespace}:{joined}"
+    return f"portfolio:{namespace}:{joined}"
 
 
 def cached(namespace: str, ttl: int | None = None) -> Callable:

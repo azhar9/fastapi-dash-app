@@ -323,9 +323,9 @@ def build_portfolios(conn: psycopg.Connection, tickers: list[str], benchmark: st
     rng = random.Random(42)
 
     portfolios = [
-        ("GAM_CORE",   "GAM Core Equity",       "Core Equity (diversified large-cap)"),
-        ("GAM_TECH",   "GAM Tech Overweight",   "Technology-tilted growth"),
-        ("GAM_DIVIDEND", "GAM Dividend Focus",  "Dividend-paying blue chips"),
+        ("CORE",     "Core Equity",      "Core Equity (diversified large-cap)"),
+        ("TECH",     "Tech Overweight",  "Technology-tilted growth"),
+        ("DIVIDEND", "Dividend Focus",   "Dividend-paying blue chips"),
     ]
 
     with conn.cursor() as cur:
@@ -354,12 +354,12 @@ def build_portfolios(conn: psycopg.Connection, tickers: list[str], benchmark: st
 
 
 def _pick_universe(code: str, all_tickers: list[str], rng: random.Random) -> list[str]:
-    if code == "GAM_TECH":
+    if code == "TECH":
         tech = [t for t in all_tickers if SECTOR_MAP.get(t, (None, None))[1] == "Technology"]
         others = [t for t in all_tickers if t not in tech]
         rng.shuffle(others)
         return tech + others[:3]
-    if code == "GAM_DIVIDEND":
+    if code == "DIVIDEND":
         dividend_like = ["JNJ", "PG", "KO", "PEP", "XOM", "CVX", "MRK", "ABBV", "WMT", "JPM", "V", "MA"]
         return [t for t in dividend_like if t in all_tickers]
     # Core — 15 names across sectors

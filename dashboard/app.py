@@ -29,7 +29,7 @@ app = dash.Dash(
     use_pages=True,
     pages_folder="pages",
     suppress_callback_exceptions=True,
-    title="GAM Performance Dashboard",
+    title="Portfolio Analytics",
 )
 server = app.server  # exposed for gunicorn/uvicorn if later deployed that way
 
@@ -54,8 +54,8 @@ def _sidebar_layout():
     ]
     return dbc.Col(
         [
-            html.H4("RBC GAM", className="mt-3"),
-            html.Div("Performance Dashboard", className="text-muted small mb-4"),
+            html.H4("Portfolio Analytics", className="mt-3"),
+            html.Div("Demo • FastAPI + Dash + AI", className="text-muted small mb-4"),
             html.Label("Portfolio", className="small text-muted"),
             html.Div(portfolio_selector(PORTFOLIOS_AT_START), id="portfolio-select-wrapper"),
             html.Hr(),

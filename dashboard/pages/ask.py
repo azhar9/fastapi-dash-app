@@ -16,9 +16,9 @@ dash.register_page(__name__, path="/ask", name="Ask (AI)", order=5)
 
 EXAMPLES = [
     "Top 5 holdings in the Tech portfolio by weight",
-    "Show the NAV of GAM_CORE over the last year",
+    "Show the NAV of the Core portfolio over the last year",
     "Which sector has the highest average weight across all portfolios?",
-    "Compare cumulative returns of GAM_TECH vs GAM_DIVIDEND since inception",
+    "Compare cumulative returns of Tech vs Dividend since inception",
     "List the 10 most volatile stocks over the last 90 days",
 ]
 
@@ -38,7 +38,7 @@ def layout(**_kwargs):
                     dbc.Col(
                         dbc.Input(
                             id="ask-input",
-                            placeholder="e.g. Top 5 holdings in GAM_TECH by weight",
+                            placeholder="e.g. Top 5 holdings in the Tech portfolio by weight",
                             type="text",
                             debounce=False,
                         ),
