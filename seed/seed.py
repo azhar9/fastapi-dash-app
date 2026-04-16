@@ -17,9 +17,21 @@ from datetime import date, timedelta
 
 import pandas as pd
 import psycopg
-import yfinance as yf
 from psycopg.rows import dict_row
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+# curl_cffi impersonates a real Chrome TLS fingerprint. Yahoo's query1
+# endpoint blocks python-requests / httpx on sight but serves real-browser
+# traffic. We go straight to the chart API (same endpoint the yfinance
+# library calls internally) instead of through yfinance because the lib
+# currently has a Session-object compatibility bug with curl_cffi.
+try:
+    from curl_cffi import requests as _curl_requests
+    _BROWSER_SESSION = _curl_requests.Session(impersonate="chrome")
+except Exception:  # pragma: no cover - only hit on install issues
+    _BROWSER_SESSION = None
+
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,73 +116,101 @@ def already_seeded(conn: psycopg.Connection) -> bool:
 def download_prices(tickers: list[str], start: str) -> tuple[pd.DataFrame, str]:
     """Fetch daily prices for every ticker.
 
-    Strategy:
-      1. Try yfinance one ticker at a time with a small delay between calls.
-         Batch downloads get rate-limited almost immediately in 2025-2026.
-      2. If *every* ticker fails (e.g. sustained YFRateLimitError), fall back
-         to a deterministic synthetic price series so the demo stack still
-         starts. The caller is told which path we took.
+    Tiered strategy:
+      1. Yahoo Finance chart API via curl_cffi. Real prices, keyless,
+         adjusted close included. We rotate in a small delay between
+         requests so the rate limiter stays happy.
+      2. Synthetic geometric Brownian motion for anything Yahoo refused.
+         Guarantees the stack always starts cleanly.
+
+    Returns (rows, source_label) — "yfinance" / "synthetic" / "mixed".
     """
     rows: list[dict] = []
-    failed: list[str] = []
-    for i, ticker in enumerate(tickers):
-        frame = _fetch_one_yfinance(ticker, start)
-        if frame is None or frame.empty:
-            failed.append(ticker)
-            continue
-        rows.extend(_normalise_yf_rows(ticker, frame))
-        # Courtesy delay so Yahoo's rate limiter doesn't escalate.
-        if i < len(tickers) - 1:
-            time.sleep(0.6)
+    still_missing: list[str] = list(tickers)
+    used: set[str] = set()
 
-    if not rows:
-        log.warning(
-            "yfinance unavailable for all %d tickers; falling back to synthetic prices",
-            len(tickers),
-        )
-        return _synthetic_prices(tickers, start), "synthetic"
+    if _BROWSER_SESSION is not None:
+        log.info("fetching %d tickers from Yahoo (direct chart API)", len(still_missing))
+        fetched = []
+        for i, ticker in enumerate(still_missing):
+            frame = _fetch_yahoo_chart(ticker, start)
+            if frame:
+                rows.extend(frame)
+                fetched.append(ticker)
+            if i < len(still_missing) - 1:
+                time.sleep(0.3)
+        if fetched:
+            used.add("yfinance")
+            log.info("yahoo supplied %d/%d tickers", len(fetched), len(still_missing))
+        still_missing = [t for t in still_missing if t not in fetched]
 
-    if failed:
-        log.warning("yfinance failed for %d/%d tickers, filling with synthetic: %s",
-                    len(failed), len(tickers), failed)
-        rows.extend(_synthetic_prices(failed, start).to_dict("records"))
-        return pd.DataFrame(rows), "mixed"
+    if still_missing:
+        log.warning("%d tickers unavailable from Yahoo, using synthetic: %s",
+                    len(still_missing), still_missing)
+        rows.extend(_synthetic_prices(still_missing, start).to_dict("records"))
+        used.add("synthetic")
 
-    return pd.DataFrame(rows), "yfinance"
+    if not used:
+        return pd.DataFrame(rows), "empty"
+    label = next(iter(used)) if len(used) == 1 else "mixed(" + "+".join(sorted(used)) + ")"
+    return pd.DataFrame(rows), label
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=10))
-def _fetch_one_yfinance(ticker: str, start: str) -> pd.DataFrame | None:
+def _fetch_yahoo_chart(ticker: str, start: str) -> list[dict] | None:
+    """Hit Yahoo's chart API directly, parse the JSON, return row dicts.
+
+    Response shape:
+        { "chart": { "result": [ {
+            "timestamp": [unix_ts, ...],
+            "indicators": { "quote": [{ "open":[], "high":[],
+                                        "low":[], "close":[], "volume":[] }],
+                            "adjclose": [{ "adjclose": [] }] }
+        } ] } }
+    """
+    start_ts = int(time.mktime(date.fromisoformat(start).timetuple()))
+    end_ts   = int(time.time()) + 86400
+    url = YAHOO_CHART_URL.format(ticker=ticker)
+    params = {"period1": start_ts, "period2": end_ts, "interval": "1d"}
     try:
-        df = yf.Ticker(ticker).history(start=start, auto_adjust=False)
+        resp = _BROWSER_SESSION.get(url, params=params, timeout=15)
     except Exception as e:
-        log.warning("yfinance error for %s: %s", ticker, e)
+        log.warning("yahoo request failed for %s: %s", ticker, e)
         return None
-    if df is None or df.empty:
+    if resp.status_code != 200:
+        log.warning("yahoo %s for %s (body: %s)", resp.status_code, ticker, resp.text[:120])
         return None
-    return df.reset_index()
+    try:
+        payload = resp.json()
+        result  = payload["chart"]["result"][0]
+        ts      = result["timestamp"]
+        quote   = result["indicators"]["quote"][0]
+        adj     = result["indicators"].get("adjclose", [{}])[0].get("adjclose") or quote["close"]
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        log.warning("yahoo parse failed for %s: %s", ticker, e)
+        return None
 
-
-def _normalise_yf_rows(ticker: str, sub: pd.DataFrame) -> list[dict]:
-    sub = sub.rename(columns={
-        "Date": "dt", "Open": "o", "High": "h", "Low": "l",
-        "Close": "c", "Adj Close": "ac", "Volume": "v",
-    })
-    if "ac" not in sub.columns:
-        sub["ac"] = sub["c"]
-    out = []
-    for r in sub.itertuples(index=False):
+    out: list[dict] = []
+    for i, t in enumerate(ts):
+        close = quote["close"][i]
+        if close is None:
+            continue
+        d = date.fromtimestamp(t)
         out.append({
-            "ticker": ticker,
-            "as_of_date": r.dt.date() if hasattr(r.dt, "date") else r.dt,
-            "open":      float(r.o)  if pd.notna(r.o)  else None,
-            "high":      float(r.h)  if pd.notna(r.h)  else None,
-            "low":       float(r.l)  if pd.notna(r.l)  else None,
-            "close":     float(r.c),
-            "adj_close": float(r.ac),
-            "volume":    int(r.v)    if pd.notna(r.v)  else None,
+            "ticker":     ticker,
+            "as_of_date": d,
+            "open":       _maybe_float(quote["open"][i]),
+            "high":       _maybe_float(quote["high"][i]),
+            "low":        _maybe_float(quote["low"][i]),
+            "close":      float(close),
+            "adj_close":  float(adj[i]) if adj[i] is not None else float(close),
+            "volume":     int(quote["volume"][i]) if quote["volume"][i] is not None else None,
         })
     return out
+
+
+def _maybe_float(v) -> float | None:
+    return float(v) if v is not None else None
 
 
 def _synthetic_prices(tickers: list[str], start: str) -> pd.DataFrame:
@@ -212,18 +252,20 @@ def _synthetic_prices(tickers: list[str], start: str) -> pd.DataFrame:
 
 def download_benchmark(ticker: str, start: str) -> pd.DataFrame:
     log.info("downloading benchmark %s", ticker)
-    df = _fetch_one_yfinance(ticker, start)
-    if df is None or df.empty:
-        log.warning("yfinance failed for benchmark %s, using synthetic", ticker)
-        syn = _synthetic_prices([ticker], start)
-        out = syn[["as_of_date", "close", "adj_close"]].copy()
-        out["benchmark"] = ticker
-        return out[["benchmark", "as_of_date", "close", "adj_close"]]
-    df = df.rename(columns={"Adj Close": "adj_close", "Close": "close", "Date": "as_of_date"})
-    df["benchmark"] = ticker
-    if "adj_close" not in df.columns:
-        df["adj_close"] = df["close"]
-    return df[["benchmark", "as_of_date", "close", "adj_close"]]
+
+    if _BROWSER_SESSION is not None:
+        rows = _fetch_yahoo_chart(ticker, start)
+        if rows:
+            df = pd.DataFrame(rows)[["as_of_date", "close", "adj_close"]]
+            df["benchmark"] = ticker
+            log.info("benchmark source: yfinance (%d rows)", len(df))
+            return df[["benchmark", "as_of_date", "close", "adj_close"]]
+
+    log.warning("benchmark %s unavailable from Yahoo, using synthetic", ticker)
+    syn = _synthetic_prices([ticker], start)
+    out = syn[["as_of_date", "close", "adj_close"]].copy()
+    out["benchmark"] = ticker
+    return out[["benchmark", "as_of_date", "close", "adj_close"]]
 
 
 def insert_securities(conn: psycopg.Connection, tickers: list[str]) -> None:

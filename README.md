@@ -3,8 +3,10 @@
 A production-shaped Dash + FastAPI + PostgreSQL + Redis app that reports
 portfolio performance, holdings, and risk against a benchmark.
 
-The data is real (equity prices via `yfinance`), the SQL is hand-written
-and uses window functions, CTEs, and a materialised view. The FastAPI
+The data is real (equity prices fetched directly from Yahoo Finance's
+public chart API, using `curl_cffi` to impersonate a browser's TLS
+fingerprint), the SQL is hand-written and uses window functions, CTEs,
+and a materialised view. The FastAPI
 service has JSON logs with request IDs, a Redis-backed cache, and RFC
 7807 problem-details error responses.
 
@@ -22,7 +24,7 @@ service has JSON logs with request IDs, a Redis-backed cache, and RFC
                               │  Redis     │   TTL cache per endpoint
                               └────────────┘
 
-[seed] one-shot container → yfinance → Postgres (real S&P prices)
+[seed] one-shot container → Yahoo chart API (via curl_cffi) → Postgres
 ```
 
 ## Quick start
@@ -36,8 +38,19 @@ docker compose up --build
 - API docs (Swagger): http://localhost:8000/docs
 - API health: http://localhost:8000/readyz
 
-First start takes ~1 minute because the `seed` container downloads ~2
-years of daily prices for ~30 tickers + SPY.
+First start takes ~30 seconds because the `seed` container downloads
+~4 years of daily prices for 30 tickers + SPY from Yahoo's chart API.
+
+### Note on the data source
+
+Yahoo aggressively rate-limits `python-requests` and `httpx` user
+agents. We use `curl_cffi` to impersonate a real Chrome TLS fingerprint
+and call Yahoo's public chart endpoint
+(`query1.finance.yahoo.com/v8/finance/chart/{ticker}`) directly — this
+is the same endpoint the `yfinance` library hits internally, but going
+direct avoids a compatibility bug between yfinance 0.2.x and newer
+curl_cffi. If Yahoo still refuses (sustained block), the seed falls
+back to deterministic synthetic prices so the stack always boots.
 
 ## Project layout
 
@@ -65,7 +78,7 @@ years of daily prices for ~30 tickers + SPY.
 │   ├── pages/            overview, holdings, performance, risk
 │   ├── Dockerfile
 │   └── requirements.txt
-├── seed/                 one-shot yfinance → PG loader
+├── seed/                 one-shot Yahoo → PG loader (curl_cffi-impersonated)
 │   ├── seed.py
 │   ├── Dockerfile
 │   └── requirements.txt
