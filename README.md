@@ -203,11 +203,99 @@ pip install -r tests/requirements.txt
 pytest -v
 ```
 
-## CI
+## CI/CD
 
-`.github/workflows/ci.yml` runs on push and PR: `ruff check`, builds the
-compose stack, runs the seed, starts the API, runs `pytest`, then tears
-down. API logs are dumped on failure.
+Two workflows drive everything:
+
+- **`.github/workflows/ci.yml`** — runs on every push and PR. Executes
+  on GitHub-hosted `ubuntu-latest` (NOT the self-hosted runner; this
+  repo is public, and a self-hosted runner would let a malicious PR run
+  code on the server). Steps: `ruff check`, build the compose stack,
+  seed, start the API, run pytest, tear down.
+
+- **`.github/workflows/cd.yml`** — runs after CI succeeds on `main`.
+  Deploys to the production server over SSH:
+    1. Configures an SSH key from `DEPLOY_SSH_KEY` secret.
+    2. `rsync` the repo (minus `.env`, `.git`, `pgdata`, caches) into
+       `/opt/dashdemo-therealsoftware/app/` on the server.
+    3. Writes `/opt/dashdemo-therealsoftware/.env` on the server from
+       GitHub secrets (scp'd from a tmpfile so values don't appear in
+       the process table). File is chmod 600 after upload.
+    4. SSHs in and runs
+       `docker compose -p dashdemo --env-file .env -f app/docker-compose.prod.yml up -d --build --remove-orphans`.
+    5. Polls `https://dashdemo.therealsoftware.com` until it returns
+       HTTP 200, dumps server-side logs on failure.
+
+### Production topology
+
+```
+Internet ──► Traefik (host's 80/443, Let's Encrypt) ──► dashboard :8050
+                                                             │
+                                                             ▼
+                                                        api :8000
+                                                        │         │
+                                                        ▼         ▼
+                                                    postgres    redis
+```
+
+Only `dashboard` joins the external `web` network (where Traefik sees
+it); the rest stay on `internal`. Traefik labels on the dashboard
+service route `dashdemo.therealsoftware.com` → container port 8050,
+with an HTTP → HTTPS redirect middleware and Let's Encrypt cert via the
+same resolver used by the main site.
+
+### First-time setup (one-off)
+
+1. **DNS** — add an A record for
+   `dashdemo.therealsoftware.com` → `217.15.170.249`. Let's Encrypt's
+   HTTP-01 challenge needs to reach the server, so if you're behind
+   Cloudflare match whatever proxy setting you use for the main domain.
+
+2. **GitHub Actions secrets** (Settings → Secrets and variables → Actions):
+
+   | Secret | Value |
+   |---|---|
+   | `DEPLOY_HOST` | `217.15.170.249` |
+   | `DEPLOY_USER` | `root` |
+   | `DEPLOY_SSH_KEY` | Private half of the deploy key (`~/.ssh/gam-dashdemo-deploy`). Paste the full file content. |
+   | `DEPLOY_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan 217.15.170.249`. |
+   | `POSTGRES_PASSWORD` | Any strong value (used inside the stack only). |
+   | `POSTGRES_RO_PASSWORD` | Separate strong value for the read-only role. |
+   | `GROQ_API_KEY` | Your Groq API key. |
+
+   The deploy-only SSH key is the one generated during setup and
+   installed to `/root/.ssh/authorized_keys` on the server — it only
+   lets us `rsync` and run `docker compose`, nothing else.
+
+3. **Server prep** — already done:
+   - `/opt/dashdemo-therealsoftware/` exists, world-readable.
+   - Docker networks `web` + `internal` exist (the compose up step
+     creates them if missing, but the host-shared Traefik already has
+     them).
+
+### Rollback
+
+`docker compose` builds tag each image with the repo's current SHA, but
+images aren't versioned in a registry (same pattern as the reference
+site). To roll back, either:
+
+```bash
+ssh root@217.15.170.249
+cd /opt/dashdemo-therealsoftware
+# Option A — check out the previous SHA in app/ and re-run up -d --build
+cd app && git checkout <sha> && cd ..
+docker compose -p dashdemo --env-file .env -f app/docker-compose.prod.yml up -d --build
+```
+
+or click **Run workflow** on the CD action pointed at an older SHA.
+
+### Rotating secrets
+
+- Rotate `GROQ_API_KEY` in GitHub Secrets, then **Run workflow** on CD.
+  Next deploy rewrites the server's `.env`.
+- Rotate the deploy SSH key: generate a new pair, update
+  `DEPLOY_SSH_KEY`, append the new public key to the server's
+  `~/.ssh/authorized_keys`, then remove the old line.
 
 ## Local development without Docker
 

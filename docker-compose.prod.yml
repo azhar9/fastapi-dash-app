@@ -1,0 +1,142 @@
+# Production compose file. Deployed to /opt/dashdemo-therealsoftware/app/
+# by .github/workflows/cd.yml and run with --env-file ../.env so secrets
+# (GROQ_API_KEY etc.) come from a file owned by root on the server and
+# never touch this repo.
+#
+# All traffic enters through Traefik (already running on the host on
+# ports 80/443 with a letsencrypt certresolver). Only the dashboard is
+# labelled for Traefik; PG/Redis/API stay internal.
+
+networks:
+  web:
+    external: true
+  internal:
+    external: true
+
+volumes:
+  pgdata:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  seed:
+    build:
+      context: ./seed
+    restart: "no"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      SEED_TICKERS: ${SEED_TICKERS}
+      SEED_BENCHMARK: ${SEED_BENCHMARK}
+      SEED_START_DATE: ${SEED_START_DATE}
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_RO_USER: ${POSTGRES_RO_USER:-gam_ro}
+      POSTGRES_RO_PASSWORD: ${POSTGRES_RO_PASSWORD:-gam_ro}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_LOG_LEVEL: ${API_LOG_LEVEL:-INFO}
+      API_CACHE_TTL_SECONDS: ${API_CACHE_TTL_SECONDS:-300}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  dashboard:
+    build:
+      context: ./dashboard
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: http://api:8000
+      DASH_HOST: 0.0.0.0
+      DASH_PORT: 8050
+    networks:
+      - web
+      - internal
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      # Traefik attaches us to the shared 'web' network and serves
+      # dashdemo.therealsoftware.com with a Let's Encrypt cert (same
+      # resolver used by the main site).
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.services.dashdemo.loadbalancer.server.port=8050"
+
+      # HTTPS router
+      - "traefik.http.routers.dashdemo.rule=Host(`dashdemo.therealsoftware.com`)"
+      - "traefik.http.routers.dashdemo.entrypoints=websecure"
+      - "traefik.http.routers.dashdemo.tls=true"
+      - "traefik.http.routers.dashdemo.tls.certresolver=letsencrypt"
+
+      # HTTP → HTTPS redirect
+      - "traefik.http.middlewares.dashdemo-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.dashdemo-redirect.redirectscheme.permanent=true"
+      - "traefik.http.routers.dashdemo-http.rule=Host(`dashdemo.therealsoftware.com`)"
+      - "traefik.http.routers.dashdemo-http.entrypoints=web"
+      - "traefik.http.routers.dashdemo-http.middlewares=dashdemo-redirect"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8050/').status == 200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

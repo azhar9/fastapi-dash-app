@@ -5,19 +5,27 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
+    # GitHub-hosted runner. This repo is public, so we deliberately do NOT
+    # use the self-hosted runner for CI (any PR from a fork could otherwise
+    # execute code on the host).
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install ruff
-        run: pip install ruff==0.8.2
+      - name: Install ruff + test deps
+        run: |
+          pip install --quiet ruff==0.8.2
+          pip install --quiet -r tests/requirements.txt
 
       - name: Ruff lint
         run: ruff check api/app dashboard seed tests
@@ -25,33 +33,40 @@ jobs:
       - name: Copy example env
         run: cp .env.example .env
 
-      - name: Build & start stack
+      - name: Build & start PG + Redis
         run: docker compose up -d --build postgres redis
 
       - name: Wait for postgres
         run: |
           for i in {1..30}; do
-            docker compose exec -T postgres pg_isready -U gam -d gam && break
+            if docker compose exec -T postgres pg_isready -U gam -d gam >/dev/null 2>&1; then
+              echo "postgres ready"; exit 0
+            fi
             sleep 2
           done
+          echo "postgres did not become ready"; exit 1
 
-      - name: Seed (uses network for yfinance)
+      # PG's official image auto-runs every *.sql in /docker-entrypoint-initdb.d
+      # on first container start, so the read-only role is created during
+      # "up -d". No explicit psql step needed here.
+
+      - name: Seed
         run: docker compose run --rm seed
 
       - name: Start API
-        run: docker compose up -d api
-
-      - name: Install test deps
-        run: pip install -r tests/requirements.txt
+        run: docker compose up -d --build api
 
       - name: Run pytest
         env:
-          API_URL: http://localhost:8000
+          API_URL: http://localhost:8088
         run: pytest -v tests/
 
-      - name: Dump API logs on failure
+      - name: Dump logs on failure
         if: failure()
-        run: docker compose logs api
+        run: |
+          docker compose ps
+          docker compose logs api
+          docker compose logs postgres | tail -40
 
       - name: Tear down
         if: always()
