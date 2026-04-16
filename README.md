@@ -130,7 +130,7 @@ Example: `GET /portfolios/1/risk?window_days=180`
 6. Middleware emits one JSON access-log line with method, path, status,
    and elapsed_ms.
 
-## SQL highlights (what to talk about in interview)
+## SQL highlights
 
 **KPI summary (`portfolios/kpi_summary.sql`)** — uses `LAG()` for
 same-day return and correlated scalar subqueries with `date_trunc` to
