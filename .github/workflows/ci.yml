@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.8.2
+
+      - name: Ruff lint
+        run: ruff check api/app dashboard seed tests
+
+      - name: Copy example env
+        run: cp .env.example .env
+
+      - name: Build & start stack
+        run: docker compose up -d --build postgres redis
+
+      - name: Wait for postgres
+        run: |
+          for i in {1..30}; do
+            docker compose exec -T postgres pg_isready -U gam -d gam && break
+            sleep 2
+          done
+
+      - name: Seed (uses network for yfinance)
+        run: docker compose run --rm seed
+
+      - name: Start API
+        run: docker compose up -d api
+
+      - name: Install test deps
+        run: pip install -r tests/requirements.txt
+
+      - name: Run pytest
+        env:
+          API_URL: http://localhost:8000
+        run: pytest -v tests/
+
+      - name: Dump API logs on failure
+        if: failure()
+        run: docker compose logs api
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

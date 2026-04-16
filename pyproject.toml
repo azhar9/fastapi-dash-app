@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = [".venv", "pgdata"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+# B008: FastAPI's Depends() is meant to be used as a default value.
+# E501: line length handled by the formatter, not the linter.
+# C408: Plotly's docs use dict(key=val) idiomatically in layouts — keep it.
+ignore = ["E501", "B008", "C408"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
