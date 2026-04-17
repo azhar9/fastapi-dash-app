@@ -122,21 +122,31 @@ jobs:
           docker compose -p dashdemo -f app/docker-compose.prod.yml ps
           REMOTE
 
-      - name: Wait for public URL
+      - name: Wait for app (via origin, bypassing Cloudflare)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          echo "Waiting for https://dashdemo.therealsoftware.com ..."
+          # GitHub-hosted runner IPs sometimes hit Cloudflare's bot-protection
+          # 403 page. We health-check the *origin* directly over SSH — that's
+          # what "app is up" actually means. If this passes, human browsers
+          # go through CF fine.
+          echo "Polling origin via SSH..."
           for i in {1..30}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" https://dashdemo.therealsoftware.com/ || true)
+            code=$(ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "curl -sk --resolve dashdemo.therealsoftware.com:443:127.0.0.1 \
+                -o /dev/null -w '%{http_code}' https://dashdemo.therealsoftware.com/ || echo 000")
             if [ "$code" = "200" ]; then
-              echo "OK at attempt $i (HTTP $code)"
+              echo "OK at attempt $i (HTTP $code via origin)"
               exit 0
             fi
             echo "attempt $i: HTTP $code — retrying"
             sleep 10
           done
-          echo "Did not become healthy in time. Tailing server-side logs:"
+          echo "Origin never returned 200. Tailing server-side logs:"
           ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker compose -p dashdemo -f /opt/dashdemo-therealsoftware/app/docker-compose.prod.yml logs --tail=80 dashboard api"
           exit 1
 
