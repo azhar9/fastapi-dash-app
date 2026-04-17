@@ -24,6 +24,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # Needed by /docker-entrypoint-initdb.d/002_ro_role.sh on first init.
+      POSTGRES_RO_USER: ${POSTGRES_RO_USER:-app_ro}
+      POSTGRES_RO_PASSWORD: ${POSTGRES_RO_PASSWORD:-app_ro}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
